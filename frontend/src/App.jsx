@@ -19,6 +19,13 @@ export default function App() {
   const [face, setFace] = useState("auto");
   const [full, setFull] = useState(null);
 
+  // Autopilot (LLM brain)
+  const [autopilot, setAutopilot] = useState(false);
+  const [autopilotStatus, setAutopilotStatus] = useState("");
+  const autopilotQueueRef = useRef([]);
+  const abortRef = useRef(null);
+  const schedulerRef = useRef(null);
+
   // Refs for animation loop (avoids scene rebuild)
   const bodyRef = useRef("idle");
   const armRef = useRef("auto");
@@ -148,14 +155,120 @@ export default function App() {
     };
   }, []);
 
+  // === Autopilot functions ===
+  const playNext = () => {
+    const queue = autopilotQueueRef.current;
+    if (queue.length === 0) {
+      setAutopilotStatus("Sequence complete");
+      return;
+    }
+    const cmd = queue.shift();
+    if (cmd.full) {
+      setFull(cmd.full);
+      setBody("idle");
+      setArms("auto");
+      setFace("auto");
+    } else {
+      setFull(null);
+      setBody(cmd.body || "idle");
+      setArms(cmd.arms || "auto");
+      setFace(cmd.face || "auto");
+    }
+    const parts = [];
+    if (cmd.full) {
+      parts.push(cmd.full);
+    } else {
+      parts.push(cmd.body || "idle");
+      if (cmd.arms && cmd.arms !== "auto") parts.push(cmd.arms);
+      if (cmd.face && cmd.face !== "auto") parts.push(cmd.face);
+    }
+    setAutopilotStatus(`${parts.join(" + ")}  (${cmd.duration}s)`);
+    schedulerRef.current = setTimeout(playNext, (cmd.duration || 3) * 1000);
+  };
+
+  const startAutopilot = async (prompt) => {
+    if (abortRef.current) abortRef.current.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    autopilotQueueRef.current = [];
+    clearTimeout(schedulerRef.current);
+    setAutopilot(true);
+    setAutopilotStatus("Connecting...");
+
+    try {
+      const resp = await fetch("/api/autopilot", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: prompt || "Perform an entertaining animation sequence" }),
+        signal: controller.signal,
+      });
+      if (!resp.ok) {
+        setAutopilotStatus(`Error: ${resp.status}`);
+        setAutopilot(false);
+        return;
+      }
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let leftover = "";
+      let started = false;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        leftover += decoder.decode(value, { stream: true });
+        const lines = leftover.split("\n");
+        leftover = lines.pop();
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const cmd = JSON.parse(line);
+            if (cmd.error) {
+              setAutopilotStatus(`Error: ${cmd.error}`);
+              setAutopilot(false);
+              return;
+            }
+            if (cmd.done) continue;
+            autopilotQueueRef.current.push(cmd);
+            if (!started) {
+              started = true;
+              setAutopilotStatus("Playing...");
+              playNext();
+            }
+          } catch { /* skip malformed lines */ }
+        }
+      }
+    } catch (err) {
+      if (err.name !== "AbortError") {
+        setAutopilotStatus(`Error: ${err.message}`);
+        setAutopilot(false);
+      }
+    }
+  };
+
+  const stopAutopilot = () => {
+    if (abortRef.current) abortRef.current.abort();
+    abortRef.current = null;
+    clearTimeout(schedulerRef.current);
+    autopilotQueueRef.current = [];
+    setAutopilot(false);
+    setAutopilotStatus("");
+    setBody("idle");
+    setArms("auto");
+    setFace("auto");
+    setFull(null);
+  };
+
   // === UI ===
   const isFullActive = full !== null;
+  const isLocked = isFullActive || autopilot;
 
   const layers = [
-    { label: "Body", options: bodyOptions, value: body, setter: setBody, dimmed: isFullActive },
-    { label: "Arms", options: armOptions, value: arms, setter: setArms, dimmed: isFullActive },
-    { label: "Face", options: faceOptions, value: face, setter: setFace, dimmed: isFullActive },
-    { label: "Full Body", options: fullOptions, value: full, setter: setFull, dimmed: false },
+    { label: "Body", options: bodyOptions, value: body, setter: setBody, dimmed: isLocked },
+    { label: "Arms", options: armOptions, value: arms, setter: setArms, dimmed: isLocked },
+    { label: "Face", options: faceOptions, value: face, setter: setFace, dimmed: isLocked },
+    { label: "Full Body", options: fullOptions, value: full, setter: setFull, dimmed: autopilot },
   ];
 
   const btnStyle = (active, dimmed) => ({
@@ -224,6 +337,26 @@ export default function App() {
           <button onClick={() => setRotating(!rotating)} style={btnStyle(false, false)}>
             {rotating ? "\u23F8 Pause" : "\u25B6 Spin"}
           </button>
+        </div>
+
+        {/* Autopilot */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
+          <button
+            onClick={() => autopilot ? stopAutopilot() : startAutopilot()}
+            style={{
+              ...btnStyle(autopilot, false),
+              background: autopilot ? "rgba(244,114,182,0.25)" : "rgba(255,255,255,0.06)",
+              borderColor: autopilot ? "rgba(244,114,182,0.6)" : "rgba(255,255,255,0.1)",
+              color: autopilot ? "#f472b6" : "#e2e8f0",
+              padding: "8px 16px",
+              fontSize: 13,
+            }}
+          >
+            {autopilot ? "\u25A0 Stop Autopilot" : "\u2728 Autopilot"}
+          </button>
+          {autopilotStatus && (
+            <span style={{ color: "#94a3b8", fontSize: 11 }}>{autopilotStatus}</span>
+          )}
         </div>
 
         {/* Layer rows */}
