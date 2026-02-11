@@ -35,7 +35,48 @@ export default function App() {
   const fullRef = useRef(null);
   const rotatingRef = useRef(false);
 
-  useEffect(() => { bodyRef.current = body; }, [body]);
+  // Step movement system
+  const STEP_BODIES = new Set(["step-front", "step-back", "step-left", "step-right"]);
+  const STEP_SIZE = 0.7;
+  const STEP_BOUNDS = { minX: -3, maxX: 3, minZ: -2, maxZ: 3 };
+  const STEP_DIRS = {
+    "step-front": { x: 0, z: STEP_SIZE },
+    "step-back": { x: 0, z: -STEP_SIZE },
+    "step-left": { x: -STEP_SIZE, z: 0 },
+    "step-right": { x: STEP_SIZE, z: 0 },
+  };
+  const avatarPosRef = useRef({ x: 0, z: 0 });
+  const stepFromRef = useRef({ x: 0, z: 0 });
+  const stepToRef = useRef({ x: 0, z: 0 });
+  const bodyStartRef = useRef(performance.now());
+  const bodyDurationRef = useRef(1000);
+  const nextStepDurationRef = useRef(1000);
+
+  const setupStep = (key) => {
+    const dir = STEP_DIRS[key];
+    if (!dir) return;
+    const from = { ...avatarPosRef.current };
+    const to = {
+      x: Math.max(STEP_BOUNDS.minX, Math.min(STEP_BOUNDS.maxX, from.x + dir.x)),
+      z: Math.max(STEP_BOUNDS.minZ, Math.min(STEP_BOUNDS.maxZ, from.z + dir.z)),
+    };
+    stepFromRef.current = from;
+    stepToRef.current = to;
+  };
+
+  useEffect(() => {
+    bodyRef.current = body;
+    bodyStartRef.current = performance.now();
+    if (STEP_BODIES.has(body)) {
+      bodyDurationRef.current = nextStepDurationRef.current;
+      nextStepDurationRef.current = 1000;
+      setupStep(body);
+    } else if (body === "jump") {
+      bodyDurationRef.current = 800;
+    } else if (body === "jump-fwd") {
+      bodyDurationRef.current = 2000;
+    }
+  }, [body]);
   useEffect(() => { armRef.current = arms; }, [arms]);
   useEffect(() => { faceRef.current = face; }, [face]);
   useEffect(() => { fullRef.current = full; }, [full]);
@@ -99,6 +140,27 @@ export default function App() {
       // ── Reset all defaults ──
       resetDefaults(P, avatar);
 
+      // ── Persistent position ──
+      avatar.position.x = avatarPosRef.current.x;
+      avatar.position.z = avatarPosRef.current.z;
+
+      // ── Body animation progress ──
+      const bodyProgress = Math.min(1, (performance.now() - bodyStartRef.current) / bodyDurationRef.current);
+
+      // ── Step interpolation ──
+      const isStep = STEP_BODIES.has(cb);
+      if (isStep) {
+        if (bodyProgress >= 1) {
+          avatarPosRef.current = { ...stepToRef.current };
+          avatar.position.x = stepToRef.current.x;
+          avatar.position.z = stepToRef.current.z;
+        } else {
+          const eased = bodyProgress * bodyProgress * (3 - 2 * bodyProgress);
+          avatar.position.x = stepFromRef.current.x + (stepToRef.current.x - stepFromRef.current.x) * eased;
+          avatar.position.z = stepFromRef.current.z + (stepToRef.current.z - stepFromRef.current.z) * eased;
+        }
+      }
+
       // ── Breathing (universal) ──
       const breathRate = cf === "sleeping" ? 1 : cf === "tired" ? 1.2 : 2;
       const breathAmp = cf === "tired" ? 0.03 : 0.02;
@@ -116,7 +178,7 @@ export default function App() {
           P.headGroup.rotation.z = Math.sin(t * 1.5) * 0.03;
         }
         // Compose: body → arms → face
-        applyBody(cb, P, avatar, t);
+        applyBody(cb, P, avatar, t, bodyProgress);
         applyArms(ca, P, t);
         applyFace(cf, P, t);
       }
@@ -187,6 +249,7 @@ export default function App() {
     if (queue.length === 0) {
       setAutopilot(false);
       setAutopilotStatus("Sequence complete");
+      avatarPosRef.current = { x: 0, z: 0 };
       setBody("idle");
       setArms("auto");
       setFace("auto");
@@ -210,7 +273,11 @@ export default function App() {
       setFace("auto");
     } else {
       setFull(null);
-      setBody(cmd.body || "idle");
+      const bodyKey = cmd.body || "idle";
+      if (STEP_BODIES.has(bodyKey)) {
+        nextStepDurationRef.current = (cmd.duration || 2) * 1000;
+      }
+      setBody(bodyKey);
       setArms(cmd.arms || "auto");
       setFace(cmd.face || "auto");
     }
@@ -298,6 +365,7 @@ export default function App() {
     abortRef.current = null;
     clearTimeout(schedulerRef.current);
     autopilotQueueRef.current = [];
+    avatarPosRef.current = { x: 0, z: 0 };
     setAutopilot(false);
     setAutopilotStatus("");
     setMissingActions([]);
@@ -316,11 +384,24 @@ export default function App() {
 
   const toggleSection = (key) => setOpenSections((s) => ({ ...s, [key]: !s[key] }));
 
+  const handleBodyClick = (key) => {
+    if (key === body) {
+      // Re-trigger: restart the animation
+      bodyStartRef.current = performance.now();
+      if (STEP_BODIES.has(key)) {
+        avatarPosRef.current = { ...stepToRef.current };
+        setupStep(key);
+      }
+    } else {
+      setBody(key);
+    }
+  };
+
   const layers = [
-    { key: "body", label: "Body", options: bodyOptions, value: body, setter: setBody, dimmed: isLocked },
-    { key: "arms", label: "Arms", options: armOptions, value: arms, setter: setArms, dimmed: isLocked },
-    { key: "face", label: "Face", options: faceOptions, value: face, setter: setFace, dimmed: isLocked },
-    { key: "full", label: "Full Body", options: fullOptions, value: full, setter: setFull, dimmed: autopilot },
+    { key: "body", label: "Body", options: bodyOptions, value: body, onSelect: handleBodyClick, dimmed: isLocked },
+    { key: "arms", label: "Arms", options: armOptions, value: arms, onSelect: setArms, dimmed: isLocked },
+    { key: "face", label: "Face", options: faceOptions, value: face, onSelect: setFace, dimmed: isLocked },
+    { key: "full", label: "Full Body", options: fullOptions, value: full, onSelect: setFull, dimmed: autopilot },
   ];
 
   const btnStyle = (active, dimmed) => ({
@@ -460,7 +541,7 @@ export default function App() {
           </div>
 
           {/* ── Animation Layer Sections ── */}
-          {layers.map(({ key, label, options, value, setter, dimmed }) => (
+          {layers.map(({ key, label, options, value, onSelect, dimmed }) => (
             <div key={key}>
               <div style={sectionHeaderStyle} onClick={() => toggleSection(key)}>
                 <span style={{ color: dimmed ? "#334155" : "#e2e8f0", fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>
@@ -475,7 +556,7 @@ export default function App() {
                     return (
                       <button
                         key={opt.key ?? "none"}
-                        onClick={() => !dimmed && setter(opt.key)}
+                        onClick={() => !dimmed && onSelect(opt.key)}
                         style={btnStyle(active, dimmed)}
                       >
                         {opt.label}

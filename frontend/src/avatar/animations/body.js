@@ -1,8 +1,8 @@
 export const BODY_SELF_ROTATING = new Set([
-  "walk-lr", "walk-fb", "jump-fwd", "lie-up", "lie-side",
+  "jump-fwd", "lie-up", "lie-side",
 ]);
 
-export function applyBody(name, P, avatar, t) {
+export function applyBody(name, P, avatar, t, progress = 0) {
   switch (name) {
     case "idle": {
       P.rightArm.rotation.x = Math.sin(t * 2) * 0.05;
@@ -10,68 +10,51 @@ export function applyBody(name, P, avatar, t) {
       break;
     }
 
-    case "walk": {
-      const sw = Math.sin(t * 5);
-      P.rightArm.rotation.x = sw * 0.6;
-      P.leftArm.rotation.x = -sw * 0.6;
-      P.rightArm.rotation.z = -0.08;
-      P.leftArm.rotation.z = 0.08;
-      P.leftLeg.rotation.x = sw * 0.5;
-      P.rightLeg.rotation.x = -sw * 0.5;
-      avatar.position.y = Math.abs(sw) * 0.04;
-      break;
-    }
+    case "step-front":
+    case "step-back":
+    case "step-left":
+    case "step-right": {
+      const p = progress; // 0 → 1
+      // Leading leg depends on direction
+      const isLeft = (name === "step-front" || name === "step-left");
+      const lead = isLeft ? P.leftLeg : P.rightLeg;
+      const trail = isLeft ? P.rightLeg : P.leftLeg;
+      const leadArm = isLeft ? P.rightArm : P.leftArm;   // opposite arm swings
+      const trailArm = isLeft ? P.leftArm : P.rightArm;
 
-    case "walk-lr": {
-      const lrRange = 3.5;
-      const lrSpeed = 0.6;
-      const lrCycle = ((t * lrSpeed) % 2);
-      const lrDir = lrCycle < 1 ? 1 : -1;
-      const lrProgress = lrCycle < 1 ? lrCycle : (2 - lrCycle);
-      avatar.position.x = -lrRange + lrProgress * 2 * lrRange;
-      avatar.rotation.y = lrDir === 1 ? Math.PI / 2 : -Math.PI / 2;
-      const lrSw = Math.sin(t * 5);
-      P.rightArm.rotation.x = lrSw * 0.6;
-      P.leftArm.rotation.x = -lrSw * 0.6;
-      P.rightArm.rotation.z = -0.08;
-      P.leftArm.rotation.z = 0.08;
-      P.leftLeg.rotation.x = lrSw * 0.5;
-      P.rightLeg.rotation.x = -lrSw * 0.5;
-      avatar.position.y = Math.abs(lrSw) * 0.04;
-      break;
-    }
+      if (p < 0.4) {
+        // Phase 1: lead leg lifts and swings forward
+        const phase = p / 0.4;
+        lead.rotation.x = -0.5 * Math.sin(phase * Math.PI);
+        leadArm.rotation.x = 0.4 * Math.sin(phase * Math.PI);
+      } else if (p < 0.7) {
+        // Phase 2: lead plants, trail lifts
+        const phase = (p - 0.4) / 0.3;
+        trail.rotation.x = -0.3 * Math.sin(phase * Math.PI);
+        trailArm.rotation.x = 0.3 * Math.sin(phase * Math.PI);
+      }
+      // Phase 3 (0.7-1.0): settle — legs already at neutral from resetDefaults
 
-    case "walk-fb": {
-      const fbRange = 3.0;
-      const fbSpeed = 0.5;
-      const fbCycle = ((t * fbSpeed) % 2);
-      const fbDir = fbCycle < 1 ? 1 : -1;
-      const fbProgress = fbCycle < 1 ? fbCycle : (2 - fbCycle);
-      avatar.position.z = -fbRange + fbProgress * 2 * fbRange;
-      avatar.rotation.y = fbDir === 1 ? 0 : Math.PI;
-      const fbSw = Math.sin(t * 5);
-      P.rightArm.rotation.x = fbSw * 0.6;
-      P.leftArm.rotation.x = -fbSw * 0.6;
-      P.rightArm.rotation.z = -0.08;
-      P.leftArm.rotation.z = 0.08;
-      P.leftLeg.rotation.x = fbSw * 0.5;
-      P.rightLeg.rotation.x = -fbSw * 0.5;
-      avatar.position.y = Math.abs(fbSw) * 0.04;
+      // Vertical bob during step
+      avatar.position.y = Math.sin(p * Math.PI) * 0.04;
+      // Arm swing offset
+      leadArm.rotation.z = -0.08;
+      trailArm.rotation.z = 0.08;
       break;
     }
 
     case "jump": {
-      const jmpCycle = (t * 1.5) % 1;
-      if (jmpCycle < 0.2) {
-        const sq = jmpCycle / 0.2;
+      const p = Math.min(1, progress);
+      if (p < 0.2) {
+        const sq = p / 0.2;
         avatar.position.y = -0.15 * sq;
         P.leftLeg.rotation.x = 0.3 * sq;
         P.rightLeg.rotation.x = 0.3 * sq;
         P.rightArm.rotation.z = -0.2 * sq;
         P.leftArm.rotation.z = 0.2 * sq;
         P.headGroup.rotation.x = 0.05 * sq;
-      } else if (jmpCycle < 0.6) {
-        const airP = (jmpCycle - 0.2) / 0.4;
+      } else if (p < 0.6) {
+        const airP = (p - 0.2) / 0.4;
         avatar.position.y = Math.sin(airP * Math.PI) * 1.4;
         const armUp = Math.min(airP * 2, 1);
         P.rightArm.rotation.z = 1.2 * armUp;
@@ -84,7 +67,7 @@ export function applyBody(name, P, avatar, t) {
         P.leftBrow.position.y = 0.25;
         P.rightBrow.position.y = 0.25;
       } else {
-        const landP = (jmpCycle - 0.6) / 0.4;
+        const landP = (p - 0.6) / 0.4;
         avatar.position.y = -0.15 * (1 - landP);
         P.leftLeg.rotation.x = 0.3 * (1 - landP);
         P.rightLeg.rotation.x = 0.3 * (1 - landP);
@@ -95,12 +78,12 @@ export function applyBody(name, P, avatar, t) {
     }
 
     case "jump-fwd": {
-      const jfSpeed = 0.8;
-      const jfRange = 2.5;
-      const jfFull = ((t * jfSpeed) % 2);
+      const p = Math.min(1, progress);
+      const jfRange = 2.0;
+      const jfFull = p * 2;
       const jfDir = jfFull < 1 ? 1 : -1;
       const jfLin = jfFull < 1 ? jfFull : (2 - jfFull);
-      avatar.position.z = -jfRange + jfLin * 2 * jfRange;
+      avatar.position.z += jfLin * jfRange;
       avatar.rotation.y = jfDir === 1 ? 0 : Math.PI;
       const jfBounce = (jfLin * 3) % 1;
       avatar.position.y = Math.sin(jfBounce * Math.PI) * 0.7;

@@ -79,7 +79,7 @@ You ARE a cartoon avatar — a 3D persona designed to represent an AI in convers
 
 You have a LIMITED set of actions. This is all you can do right now:
 
-BODY (how you move): idle, sit, walk, walk-lr, walk-fb, jump, jump-fwd, lie-up, lie-side
+BODY (how you move): idle, sit, step-front, step-back, step-left, step-right, jump, jump-fwd, lie-up, lie-side
 ARMS (gestures): auto, wave, hands-up, thumbs-up, peace, pointing, heart, talk
 FACE (expressions): auto, happy, angry, laughing, tired, sleeping, focused, talking
 FULL (special moves, overrides everything): twirl, front-kick, roundhouse, mr-bean
@@ -89,6 +89,10 @@ Composition: body + arms + face play simultaneously. "auto" arms/face = let the 
 You CAN SPEAK! Use the "say" field to say things out loud. The text will be spoken by a text-to-speech engine. Use this whenever the task involves talking, telling jokes, greeting, explaining, etc. When you speak, pair it with "talking" face and "talk" arms.
 
 You will receive a task or situation. Act it out using ONLY these actions — choose them deliberately. Think about what each action communicates:
+- "step-front" = one step toward the user. Chain multiple for walking closer.
+- "step-back" = one step away. Use to create distance.
+- "step-left" / "step-right" = sidestep. Chain for pacing.
+- Steps are small — chain 2-3 for noticeable movement.
 - "wave" = greeting, friendliness
 - "pointing" = emphasis, directing attention
 - "talk" arms + "talking" face = explaining, speaking
@@ -116,7 +120,7 @@ IMPORTANT — at the very end, after all animation commands, output one final JS
 This helps us know what to build next. Only list actions that would have been useful for THIS specific task.
 """
 
-_VALID_BODY = {"idle", "sit", "walk", "walk-lr", "walk-fb", "jump", "jump-fwd", "lie-up", "lie-side"}
+_VALID_BODY = {"idle", "sit", "step-front", "step-back", "step-left", "step-right", "jump", "jump-fwd", "lie-up", "lie-side"}
 _VALID_ARMS = {"auto", "wave", "hands-up", "thumbs-up", "peace", "pointing", "heart", "talk"}
 _VALID_FACE = {"auto", "happy", "angry", "laughing", "tired", "sleeping", "focused", "talking"}
 _VALID_FULL = {"twirl", "front-kick", "roundhouse", "mr-bean"}
