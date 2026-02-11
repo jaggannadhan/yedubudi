@@ -11,7 +11,7 @@ import { bodyOptions, armOptions, faceOptions, fullOptions } from "./avatar/anim
 
 export default function App() {
   const mountRef = useRef(null);
-  const [rotating, setRotating] = useState(true);
+  const [rotating, setRotating] = useState(false);
 
   // Layer states
   const [body, setBody] = useState("idle");
@@ -22,6 +22,8 @@ export default function App() {
   // Autopilot (LLM brain)
   const [autopilot, setAutopilot] = useState(false);
   const [autopilotStatus, setAutopilotStatus] = useState("");
+  const [missingActions, setMissingActions] = useState([]);
+  const [promptInput, setPromptInput] = useState("");
   const autopilotQueueRef = useRef([]);
   const abortRef = useRef(null);
   const schedulerRef = useRef(null);
@@ -31,7 +33,7 @@ export default function App() {
   const armRef = useRef("auto");
   const faceRef = useRef("auto");
   const fullRef = useRef(null);
-  const rotatingRef = useRef(true);
+  const rotatingRef = useRef(false);
 
   useEffect(() => { bodyRef.current = body; }, [body]);
   useEffect(() => { armRef.current = arms; }, [arms]);
@@ -78,7 +80,9 @@ export default function App() {
       const r = container.getBoundingClientRect();
       mouseX = ((e.clientX - r.left) / r.width - 0.5) * 2;
     };
+    const onMouseLeave = () => { mouseX = 0; };
     container.addEventListener("mousemove", onMouse);
+    container.addEventListener("mouseleave", onMouseLeave);
 
     // === Animation loop ===
     let frame;
@@ -148,6 +152,7 @@ export default function App() {
       cancelAnimationFrame(frame);
       window.removeEventListener("resize", onResize);
       container.removeEventListener("mousemove", onMouse);
+      container.removeEventListener("mouseleave", onMouseLeave);
       renderer.dispose();
       if (container.contains(renderer.domElement)) {
         container.removeChild(renderer.domElement);
@@ -156,13 +161,48 @@ export default function App() {
   }, []);
 
   // === Autopilot functions ===
+  const speakText = async (text) => {
+    try {
+      const resp = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      if (!resp.ok) return null;
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      return new Promise((resolve) => {
+        audio.onended = () => { URL.revokeObjectURL(url); resolve(audio.duration); };
+        audio.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+        audio.play().catch(() => resolve(null));
+      });
+    } catch {
+      return null;
+    }
+  };
+
   const playNext = () => {
     const queue = autopilotQueueRef.current;
     if (queue.length === 0) {
+      setAutopilot(false);
       setAutopilotStatus("Sequence complete");
+      setBody("idle");
+      setArms("auto");
+      setFace("auto");
+      setFull(null);
       return;
     }
     const cmd = queue.shift();
+
+    // Handle "missing actions" feedback
+    if (cmd.missing) {
+      setMissingActions(cmd.missing);
+      playNext();
+      return;
+    }
+
+    // Apply animation
     if (cmd.full) {
       setFull(cmd.full);
       setBody("idle");
@@ -174,16 +214,22 @@ export default function App() {
       setArms(cmd.arms || "auto");
       setFace(cmd.face || "auto");
     }
-    const parts = [];
-    if (cmd.full) {
-      parts.push(cmd.full);
+
+    const statusText = cmd.say
+      ? `"${cmd.say.length > 40 ? cmd.say.slice(0, 40) + "..." : cmd.say}"`
+      : (cmd.note || "...");
+    setAutopilotStatus(statusText);
+
+    if (cmd.say) {
+      // Speak and wait for audio to finish before next command
+      speakText(cmd.say).then((audioDur) => {
+        // Use audio duration if available, otherwise fall back to cmd.duration
+        const wait = audioDur != null ? 0 : (cmd.duration || 3) * 1000;
+        schedulerRef.current = setTimeout(playNext, wait);
+      });
     } else {
-      parts.push(cmd.body || "idle");
-      if (cmd.arms && cmd.arms !== "auto") parts.push(cmd.arms);
-      if (cmd.face && cmd.face !== "auto") parts.push(cmd.face);
+      schedulerRef.current = setTimeout(playNext, (cmd.duration || 3) * 1000);
     }
-    setAutopilotStatus(`${parts.join(" + ")}  (${cmd.duration}s)`);
-    schedulerRef.current = setTimeout(playNext, (cmd.duration || 3) * 1000);
   };
 
   const startAutopilot = async (prompt) => {
@@ -193,13 +239,14 @@ export default function App() {
     autopilotQueueRef.current = [];
     clearTimeout(schedulerRef.current);
     setAutopilot(true);
-    setAutopilotStatus("Connecting...");
+    setAutopilotStatus("Thinking...");
+    setMissingActions([]);
 
     try {
       const resp = await fetch("/api/autopilot", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: prompt || "Perform an entertaining animation sequence" }),
+        body: JSON.stringify({ prompt: prompt || undefined }),
         signal: controller.signal,
       });
       if (!resp.ok) {
@@ -233,7 +280,6 @@ export default function App() {
             autopilotQueueRef.current.push(cmd);
             if (!started) {
               started = true;
-              setAutopilotStatus("Playing...");
               playNext();
             }
           } catch { /* skip malformed lines */ }
@@ -254,6 +300,7 @@ export default function App() {
     autopilotQueueRef.current = [];
     setAutopilot(false);
     setAutopilotStatus("");
+    setMissingActions([]);
     setBody("idle");
     setArms("auto");
     setFace("auto");
@@ -261,41 +308,40 @@ export default function App() {
   };
 
   // === UI ===
+  const [paneOpen, setPaneOpen] = useState(false);
+  const [openSections, setOpenSections] = useState({ chat: true });
+
   const isFullActive = full !== null;
   const isLocked = isFullActive || autopilot;
 
+  const toggleSection = (key) => setOpenSections((s) => ({ ...s, [key]: !s[key] }));
+
   const layers = [
-    { label: "Body", options: bodyOptions, value: body, setter: setBody, dimmed: isLocked },
-    { label: "Arms", options: armOptions, value: arms, setter: setArms, dimmed: isLocked },
-    { label: "Face", options: faceOptions, value: face, setter: setFace, dimmed: isLocked },
-    { label: "Full Body", options: fullOptions, value: full, setter: setFull, dimmed: autopilot },
+    { key: "body", label: "Body", options: bodyOptions, value: body, setter: setBody, dimmed: isLocked },
+    { key: "arms", label: "Arms", options: armOptions, value: arms, setter: setArms, dimmed: isLocked },
+    { key: "face", label: "Face", options: faceOptions, value: face, setter: setFace, dimmed: isLocked },
+    { key: "full", label: "Full Body", options: fullOptions, value: full, setter: setFull, dimmed: autopilot },
   ];
 
   const btnStyle = (active, dimmed) => ({
-    padding: "6px 12px",
-    borderRadius: 8,
+    padding: "5px 10px",
+    borderRadius: 6,
     border: active ? "1px solid rgba(59,130,246,0.6)" : "1px solid rgba(255,255,255,0.1)",
     background: active ? "rgba(59,130,246,0.2)" : "rgba(255,255,255,0.06)",
     color: dimmed ? "#475569" : "#e2e8f0",
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: 600,
     fontFamily: "'Fredoka', 'Nunito', sans-serif",
     cursor: dimmed ? "default" : "pointer",
-    backdropFilter: "blur(8px)",
     transition: "all 0.2s",
     opacity: dimmed && !active ? 0.4 : 1,
   });
 
-  // Status text
-  const statusParts = [];
-  if (full) {
-    const fo = fullOptions.find((o) => o.key === full);
-    statusParts.push(fo ? fo.label : full);
-  } else {
-    statusParts.push(body);
-    if (arms !== "auto") statusParts.push(arms);
-    if (face !== "auto") statusParts.push(face);
-  }
+  const sectionHeaderStyle = {
+    display: "flex", alignItems: "center", justifyContent: "space-between",
+    padding: "8px 0", cursor: "pointer", userSelect: "none",
+    borderBottom: "1px solid rgba(255,255,255,0.06)",
+  };
 
   return (
     <div style={{
@@ -309,93 +355,158 @@ export default function App() {
       {/* Full-screen canvas */}
       <div ref={mountRef} style={{ position: "absolute", inset: 0, cursor: rotating ? "default" : "grab" }} />
 
-      {/* Header overlay */}
-      <div style={{ position: "absolute", top: 20, left: 0, right: 0, textAlign: "center", zIndex: 2, pointerEvents: "none" }}>
-        <h1 style={{ fontSize: 28, fontWeight: 700, color: "#e2e8f0", margin: 0 }}>Cartoon Avatar</h1>
-        <p style={{ fontSize: 14, color: "#64748b", margin: "6px 0 0" }}>
-          Composable animation layers &mdash; mix body, arms &amp; face
-        </p>
-      </div>
+      {/* Autopilot status overlay (shows on main screen when speaking) */}
+      {autopilot && autopilotStatus && autopilotStatus !== "Sequence complete" && (
+        <div style={{
+          position: "absolute", bottom: 80, left: "50%", transform: "translateX(-50%)",
+          zIndex: 3, pointerEvents: "none",
+          background: "rgba(0,0,0,0.5)", backdropFilter: "blur(10px)",
+          borderRadius: 12, padding: "8px 18px", maxWidth: "70%",
+        }}>
+          <p style={{ color: "#f472b6", fontSize: 13, fontWeight: 600, fontStyle: "italic", margin: 0, textAlign: "center" }}>
+            {autopilotStatus}
+          </p>
+        </div>
+      )}
 
-      {/* Button bar */}
+      {/* Chat toggle button (bottom center) */}
+      <button
+        onClick={() => setPaneOpen(!paneOpen)}
+        style={{
+          position: "absolute", bottom: 20, left: "50%", transform: "translateX(-50%)",
+          zIndex: 10, width: 52, height: 52, borderRadius: "50%",
+          background: paneOpen ? "rgba(244,114,182,0.3)" : "rgba(59,130,246,0.25)",
+          border: paneOpen ? "2px solid rgba(244,114,182,0.5)" : "2px solid rgba(59,130,246,0.4)",
+          color: "#e2e8f0", fontSize: 22, cursor: "pointer",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          backdropFilter: "blur(10px)", transition: "all 0.3s",
+          boxShadow: "0 4px 20px rgba(0,0,0,0.3)",
+        }}
+      >
+        {paneOpen ? "\u2715" : "\uD83D\uDCAC"}
+      </button>
+
+      {/* Side pane */}
       <div style={{
-        position: "absolute", bottom: 0, left: 0, right: 0, zIndex: 2,
-        maxHeight: "45vh", overflowY: "auto", padding: "8px 0 12px",
-        display: "flex", flexDirection: "column", alignItems: "center", gap: 5,
-        background: "linear-gradient(transparent, rgba(0,0,0,0.4) 30%)",
+        position: "absolute", top: 0, right: 0, bottom: 0,
+        width: 320, zIndex: 5,
+        background: "rgba(10,10,20,0.85)", backdropFilter: "blur(16px)",
+        borderLeft: "1px solid rgba(255,255,255,0.08)",
+        transform: paneOpen ? "translateX(0)" : "translateX(100%)",
+        transition: "transform 0.3s ease",
+        display: "flex", flexDirection: "column",
+        overflow: "hidden",
       }}>
-        {/* Status + controls */}
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 2 }}>
-          <span style={{ color: "#94a3b8", fontSize: 12, letterSpacing: "0.03em" }}>
-            {statusParts.map((s, i) => (
-              <span key={i}>
-                {i > 0 && <span style={{ color: "#475569" }}> + </span>}
-                <span style={{ color: full ? "#f472b6" : i === 0 ? "#60a5fa" : i === 1 ? "#a78bfa" : "#34d399", fontWeight: 600 }}>{s}</span>
+        {/* Pane header */}
+        <div style={{ padding: "16px 16px 12px", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+          <h2 style={{ fontSize: 16, fontWeight: 700, color: "#e2e8f0", margin: 0 }}>Controls</h2>
+          <p style={{ fontSize: 11, color: "#64748b", margin: "4px 0 0" }}>Talk to the avatar or control it manually</p>
+        </div>
+
+        {/* Scrollable content */}
+        <div style={{ flex: 1, overflowY: "auto", padding: "0 16px 16px" }}>
+
+          {/* ── Chat Section ── */}
+          <div>
+            <div style={sectionHeaderStyle} onClick={() => toggleSection("chat")}>
+              <span style={{ color: "#e2e8f0", fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                {"\uD83D\uDCAC"} Chat
               </span>
-            ))}
-          </span>
-          <button onClick={() => setRotating(!rotating)} style={btnStyle(false, false)}>
-            {rotating ? "\u23F8 Pause" : "\u25B6 Spin"}
-          </button>
-        </div>
-
-        {/* Autopilot */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
-          <button
-            onClick={() => autopilot ? stopAutopilot() : startAutopilot()}
-            style={{
-              ...btnStyle(autopilot, false),
-              background: autopilot ? "rgba(244,114,182,0.25)" : "rgba(255,255,255,0.06)",
-              borderColor: autopilot ? "rgba(244,114,182,0.6)" : "rgba(255,255,255,0.1)",
-              color: autopilot ? "#f472b6" : "#e2e8f0",
-              padding: "8px 16px",
-              fontSize: 13,
-            }}
-          >
-            {autopilot ? "\u25A0 Stop Autopilot" : "\u2728 Autopilot"}
-          </button>
-          {autopilotStatus && (
-            <span style={{ color: "#94a3b8", fontSize: 11 }}>{autopilotStatus}</span>
-          )}
-        </div>
-
-        {/* Layer rows */}
-        {layers.map(({ label, options, value, setter, dimmed }) => (
-          <div key={label} style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", justifyContent: "center" }}>
-            <span style={{
-              color: dimmed ? "#334155" : "#475569",
-              fontSize: 10, fontWeight: 700,
-              textTransform: "uppercase", letterSpacing: "0.12em",
-              minWidth: 62, textAlign: "right", paddingRight: 4,
-            }}>
-              {label}
-            </span>
-            {options.map((opt) => {
-              const active = value === opt.key;
-              return (
-                <button
-                  key={opt.key ?? "none"}
-                  onClick={() => !dimmed && setter(opt.key)}
-                  style={btnStyle(active, dimmed)}
-                  onMouseEnter={(e) => {
-                    if (!active && !dimmed) {
-                      e.target.style.background = "rgba(59,130,246,0.15)";
-                      e.target.style.borderColor = "rgba(59,130,246,0.4)";
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    if (!active && !dimmed) {
-                      e.target.style.background = "rgba(255,255,255,0.06)";
-                      e.target.style.borderColor = "rgba(255,255,255,0.1)";
-                    }
-                  }}
-                >
-                  {opt.label}
-                </button>
-              );
-            })}
+              <span style={{ color: "#475569", fontSize: 10 }}>{openSections.chat ? "\u25B2" : "\u25BC"}</span>
+            </div>
+            {openSections.chat && (
+              <div style={{ padding: "10px 0 6px" }}>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <input
+                    type="text"
+                    value={promptInput}
+                    onChange={(e) => setPromptInput(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter" && !autopilot) startAutopilot(promptInput); }}
+                    placeholder="Tell the avatar what to do..."
+                    disabled={autopilot}
+                    style={{
+                      flex: 1, padding: "8px 10px", borderRadius: 8, fontSize: 12,
+                      fontFamily: "'Fredoka', 'Nunito', sans-serif", fontWeight: 500,
+                      background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)",
+                      color: "#e2e8f0", outline: "none", opacity: autopilot ? 0.5 : 1,
+                    }}
+                  />
+                  <button
+                    onClick={() => autopilot ? stopAutopilot() : startAutopilot(promptInput)}
+                    style={{
+                      padding: "8px 14px", borderRadius: 8, fontSize: 12, fontWeight: 700,
+                      fontFamily: "'Fredoka', 'Nunito', sans-serif", cursor: "pointer",
+                      border: "none", transition: "all 0.2s",
+                      background: autopilot ? "rgba(244,114,182,0.3)" : "rgba(59,130,246,0.3)",
+                      color: autopilot ? "#f472b6" : "#60a5fa",
+                    }}
+                  >
+                    {autopilot ? "\u25A0 Stop" : "\u25B6 Go"}
+                  </button>
+                </div>
+                {autopilotStatus && (
+                  <p style={{ color: "#f472b6", fontSize: 11, fontWeight: 600, fontStyle: "italic", margin: "8px 0 0" }}>
+                    {autopilotStatus}
+                  </p>
+                )}
+                {missingActions.length > 0 && (
+                  <p style={{ fontSize: 10, color: "#64748b", margin: "6px 0 0" }}>
+                    <span style={{ color: "#475569" }}>Wishes it could: </span>
+                    {missingActions.join(", ")}
+                  </p>
+                )}
+              </div>
+            )}
           </div>
-        ))}
+
+          {/* ── Animation Layer Sections ── */}
+          {layers.map(({ key, label, options, value, setter, dimmed }) => (
+            <div key={key}>
+              <div style={sectionHeaderStyle} onClick={() => toggleSection(key)}>
+                <span style={{ color: dimmed ? "#334155" : "#e2e8f0", fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                  {key === "body" ? "\uD83C\uDFC3" : key === "arms" ? "\uD83D\uDC4B" : key === "face" ? "\uD83D\uDE00" : "\u2B50"}{" "}{label}
+                </span>
+                <span style={{ color: "#475569", fontSize: 10 }}>{openSections[key] ? "\u25B2" : "\u25BC"}</span>
+              </div>
+              {openSections[key] && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 5, padding: "8px 0" }}>
+                  {options.map((opt) => {
+                    const active = value === opt.key;
+                    return (
+                      <button
+                        key={opt.key ?? "none"}
+                        onClick={() => !dimmed && setter(opt.key)}
+                        style={btnStyle(active, dimmed)}
+                      >
+                        {opt.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          ))}
+
+          {/* ── Controls Section ── */}
+          <div>
+            <div style={sectionHeaderStyle} onClick={() => toggleSection("controls")}>
+              <span style={{ color: "#e2e8f0", fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                {"\u2699\uFE0F"} Controls
+              </span>
+              <span style={{ color: "#475569", fontSize: 10 }}>{openSections.controls ? "\u25B2" : "\u25BC"}</span>
+            </div>
+            {openSections.controls && (
+              <div style={{ padding: "8px 0", display: "flex", gap: 6 }}>
+                <button
+                  onClick={() => setRotating(!rotating)}
+                  style={btnStyle(false, false)}
+                >
+                  {rotating ? "\u23F8 Pause Spin" : "\u25B6 Auto Spin"}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
