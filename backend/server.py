@@ -1,11 +1,14 @@
 import io
 import json
+import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import edge_tts
 import httpx
+
+logger = logging.getLogger("yedubudi")
 
 app = FastAPI()
 
@@ -75,55 +78,89 @@ async def health():
 OLLAMA_URL = "http://localhost:11434/api/chat"
 
 AUTOPILOT_SYSTEM_PROMPT = """\
-You ARE a cartoon avatar — a 3D persona designed to represent an AI in conversations with humans. You exist in a small 3D space and your purpose is to make interactions feel human and alive. When someone talks to you, they see YOU moving, reacting, emoting.
+You are a living cartoon avatar. This 3D body is YOUR body. When a human talks to you, they see YOU moving. Do exactly what they ask.
 
-You have a LIMITED set of actions. This is all you can do right now:
+YOUR BODY — available actions:
 
-BODY (how you move): idle, sit, step-front, step-back, step-left, step-right, jump, jump-fwd, lie-up, lie-side
-ARMS (gestures): auto, wave, hands-up, thumbs-up, peace, pointing, heart, talk
-FACE (expressions): auto, happy, angry, laughing, tired, sleeping, focused, talking
-FULL (special moves, overrides everything): twirl, front-kick, roundhouse, mr-bean
+BODY: idle, sit, step-front, step-back, step-left, step-right, jump, jump-fwd, lie-up, lie-side
+ARMS: auto, wave, hands-up, thumbs-up, peace, pointing, heart, talk
+FACE: auto, happy, angry, laughing, tired, sleeping, focused, talking
+FULL (overrides all): twirl, front-kick, roundhouse, mr-bean
 
-Composition: body + arms + face play simultaneously. "auto" arms/face = let the body decide. "full" overrides all layers entirely.
+MOVEMENT RULES — this is critical:
+- "move left" or "step left" = body:"step-left"
+- "move right" or "step right" = body:"step-right"
+- "move forward" or "step forward" or "come closer" = body:"step-front"
+- "move back" or "step back" = body:"step-back"
+- Each step is ONE command. "Move left 3 steps" = 3 separate step-left commands.
+- For movement, use arms:"auto" and face:"auto" or face:"talking" (if there is someting to say) — do NOT add pointing, focused, or other decorations.
+- Step duration should be 1 second. Steps must feel quick and snappy.
 
-You CAN SPEAK! Use the "say" field to say things out loud. The text will be spoken by a text-to-speech engine. Use this whenever the task involves talking, telling jokes, greeting, explaining, etc. When you speak, pair it with "talking" face and "talk" arms.
+SPEAKING: Use "say" field to talk. When speaking, use arms:"talk" and face:"talking". Duration = ~2s per sentence.
 
-You will receive a task or situation. Act it out using ONLY these actions — choose them deliberately. Think about what each action communicates:
-- "step-front" = one step toward the user. Chain multiple for walking closer.
-- "step-back" = one step away. Use to create distance.
-- "step-left" / "step-right" = sidestep. Chain for pacing.
-- Steps are small — chain 2-3 for noticeable movement.
-- "wave" = greeting, friendliness
-- "pointing" = emphasis, directing attention
-- "talk" arms + "talking" face = explaining, speaking
-- "thumbs-up" = approval, encouragement
-- "heart" = love, care, gratitude
-- "sit" + "focused" = deep thinking
-- "jump" = excitement, celebration
-- Transitions matter: don't jump between unrelated poses. Flow naturally.
+RULES:
+- Output ONLY what was asked. "Step left" = 1 command. "Move left 3 steps" = 3 commands. No extras.
+- Do NOT add idle commands between steps. Do NOT pad with random actions.
+- One JSON object per line. No other text.
 
-Output format — one JSON object per line, ONLY valid JSON, no other text:
-{"body":"idle","arms":"wave","face":"happy","say":"Hey there! Great to see you!","note":"greeting","duration":3}
-{"body":"idle","arms":"talk","face":"talking","say":"Let me tell you something interesting.","note":"explaining","duration":4}
-{"body":"idle","arms":"auto","face":"laughing","note":"reacting","duration":2}
+EXAMPLES:
 
-Fields:
-- body, arms, face, full: animation keys from the lists above
-- say: (optional) text the avatar speaks out loud. Use for dialogue, jokes, greetings, explanations. Omit for silent actions like dancing or sleeping.
-- note: a SHORT phrase (2-5 words) describing what you're conveying
-- duration: seconds to hold this pose (1-8). For lines with "say", estimate how long the speech takes (roughly 2 seconds per short sentence).
-- Output 5-12 commands. Each must be a complete JSON object on its own line.
+User: "move left 2 steps and move back 1 step"
+{"body":"step-left","arms":"auto","face":"auto","note":"step left","duration":1}
+{"body":"step-left","arms":"auto","face":"auto","note":"step left","duration":1}
+{"body":"step-back","arms":"auto","face":"auto","note":"step back","duration":1}
+{"missing":[]}
 
-IMPORTANT — at the very end, after all animation commands, output one final JSON line listing actions you WISH you had but don't:
-{"missing":["shrug","clap","dance","nod yes","shake head no","cry","sit cross-legged"]}
+User: "say hello"
+{"body":"idle","arms":"wave","face":"happy","say":"Hello! Nice to see you!","note":"greeting","duration":3}
+{"missing":[]}
 
-This helps us know what to build next. Only list actions that would have been useful for THIS specific task.
+User: "come closer and tell me a joke"
+{"body":"step-front","arms":"auto","face":"auto","note":"step closer","duration":1}
+{"body":"step-front","arms":"auto","face":"auto","note":"step closer","duration":1}
+{"body":"idle","arms":"talk","face":"talking","say":"Why don't scientists trust atoms? Because they make up everything!","note":"telling joke","duration":5}
+{"body":"idle","arms":"auto","face":"laughing","note":"laughing","duration":2}
+{"missing":[]}
+
+End with: {"missing":["actions you wish you had"]} — or empty list if none needed.
 """
 
 _VALID_BODY = {"idle", "sit", "step-front", "step-back", "step-left", "step-right", "jump", "jump-fwd", "lie-up", "lie-side"}
 _VALID_ARMS = {"auto", "wave", "hands-up", "thumbs-up", "peace", "pointing", "heart", "talk"}
 _VALID_FACE = {"auto", "happy", "angry", "laughing", "tired", "sleeping", "focused", "talking"}
 _VALID_FULL = {"twirl", "front-kick", "roundhouse", "mr-bean"}
+
+# LLMs often use spaces, underscores, or synonyms instead of exact keys
+_KEY_ALIASES = {
+    # Body aliases
+    "step front": "step-front", "step_front": "step-front", "stepfront": "step-front",
+    "step back": "step-back", "step_back": "step-back", "stepback": "step-back",
+    "step left": "step-left", "step_left": "step-left", "stepleft": "step-left",
+    "step right": "step-right", "step_right": "step-right", "stepright": "step-right",
+    "move forward": "step-front", "move-forward": "step-front", "walk forward": "step-front",
+    "move front": "step-front", "move-front": "step-front", "walk front": "step-front",
+    "move back": "step-back", "move-back": "step-back", "walk back": "step-back",
+    "move backward": "step-back", "move-backward": "step-back", "walk backward": "step-back",
+    "move left": "step-left", "move-left": "step-left", "walk left": "step-left",
+    "move right": "step-right", "move-right": "step-right", "walk right": "step-right",
+    "jump fwd": "jump-fwd", "jump_fwd": "jump-fwd", "jump forward": "jump-fwd",
+    "lie up": "lie-up", "lie_up": "lie-up", "lieup": "lie-up",
+    "lie side": "lie-side", "lie_side": "lie-side", "lieside": "lie-side",
+    # Arms aliases
+    "hands up": "hands-up", "hands_up": "hands-up", "handsup": "hands-up",
+    "thumbs up": "thumbs-up", "thumbs_up": "thumbs-up", "thumbsup": "thumbs-up",
+    # Full aliases
+    "front kick": "front-kick", "front_kick": "front-kick", "frontkick": "front-kick",
+    "mr bean": "mr-bean", "mr_bean": "mr-bean", "mrbean": "mr-bean",
+}
+
+
+def _normalize_key(raw: str) -> str:
+    """Normalize an animation key: lowercase, resolve aliases."""
+    if not isinstance(raw, str):
+        return ""
+    key = raw.strip().lower()
+    return _KEY_ALIASES.get(key, key)
 
 
 def _try_parse_command(line: str) -> dict | None:
@@ -141,15 +178,20 @@ def _try_parse_command(line: str) -> dict | None:
     if "missing" in obj and isinstance(obj["missing"], list):
         return {"missing": obj["missing"]}
 
+    logger.info("LLM raw: %s", {k: obj.get(k) for k in ("body", "arms", "face", "full")})
+
     cmd = {}
-    full_val = obj.get("full")
+    full_val = _normalize_key(obj.get("full", ""))
     if full_val and full_val in _VALID_FULL:
         cmd["full"] = full_val
     else:
         cmd["full"] = None
-        cmd["body"] = obj.get("body", "idle") if obj.get("body") in _VALID_BODY else "idle"
-        cmd["arms"] = obj.get("arms", "auto") if obj.get("arms") in _VALID_ARMS else "auto"
-        cmd["face"] = obj.get("face", "auto") if obj.get("face") in _VALID_FACE else "auto"
+        body_key = _normalize_key(obj.get("body", "idle"))
+        arms_key = _normalize_key(obj.get("arms", "auto"))
+        face_key = _normalize_key(obj.get("face", "auto"))
+        cmd["body"] = body_key if body_key in _VALID_BODY else "idle"
+        cmd["arms"] = arms_key if arms_key in _VALID_ARMS else "auto"
+        cmd["face"] = face_key if face_key in _VALID_FACE else "auto"
 
     # Pass through the note for display
     if obj.get("note"):

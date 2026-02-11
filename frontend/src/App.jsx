@@ -24,6 +24,7 @@ export default function App() {
   const [autopilotStatus, setAutopilotStatus] = useState("");
   const [missingActions, setMissingActions] = useState([]);
   const [promptInput, setPromptInput] = useState("");
+  const [llmLog, setLlmLog] = useState([]);
   const autopilotQueueRef = useRef([]);
   const abortRef = useRef(null);
   const schedulerRef = useRef(null);
@@ -244,12 +245,18 @@ export default function App() {
     }
   };
 
+  const commitStepPosition = () => {
+    if (STEP_BODIES.has(bodyRef.current)) {
+      avatarPosRef.current = { ...stepToRef.current };
+    }
+  };
+
   const playNext = () => {
     const queue = autopilotQueueRef.current;
     if (queue.length === 0) {
+      commitStepPosition();
       setAutopilot(false);
       setAutopilotStatus("Sequence complete");
-      avatarPosRef.current = { x: 0, z: 0 };
       setBody("idle");
       setArms("auto");
       setFace("auto");
@@ -257,6 +264,8 @@ export default function App() {
       return;
     }
     const cmd = queue.shift();
+    console.log("[autopilot] cmd:", JSON.stringify(cmd));
+    setLlmLog((prev) => [...prev, cmd]);
 
     // Handle "missing actions" feedback
     if (cmd.missing) {
@@ -264,6 +273,9 @@ export default function App() {
       playNext();
       return;
     }
+
+    // Commit previous step position before switching to next command
+    commitStepPosition();
 
     // Apply animation
     if (cmd.full) {
@@ -274,10 +286,23 @@ export default function App() {
     } else {
       setFull(null);
       const bodyKey = cmd.body || "idle";
-      if (STEP_BODIES.has(bodyKey)) {
-        nextStepDurationRef.current = (cmd.duration || 2) * 1000;
+      if (bodyKey === bodyRef.current) {
+        // Same body key as current — restart manually (setBody won't trigger useEffect)
+        bodyStartRef.current = performance.now();
+        if (STEP_BODIES.has(bodyKey)) {
+          bodyDurationRef.current = (cmd.duration || 2) * 1000;
+          setupStep(bodyKey);
+        } else if (bodyKey === "jump") {
+          bodyDurationRef.current = 800;
+        } else if (bodyKey === "jump-fwd") {
+          bodyDurationRef.current = 2000;
+        }
+      } else {
+        if (STEP_BODIES.has(bodyKey)) {
+          nextStepDurationRef.current = (cmd.duration || 2) * 1000;
+        }
+        setBody(bodyKey);
       }
-      setBody(bodyKey);
       setArms(cmd.arms || "auto");
       setFace(cmd.face || "auto");
     }
@@ -308,6 +333,7 @@ export default function App() {
     setAutopilot(true);
     setAutopilotStatus("Thinking...");
     setMissingActions([]);
+    setLlmLog([]);
 
     try {
       const resp = await fetch("/api/autopilot", {
@@ -435,6 +461,35 @@ export default function App() {
 
       {/* Full-screen canvas */}
       <div ref={mountRef} style={{ position: "absolute", inset: 0, cursor: rotating ? "default" : "grab" }} />
+
+      {/* LLM debug log (top-left) */}
+      {llmLog.length > 0 && (
+        <div style={{
+          position: "absolute", top: 12, left: 12, zIndex: 10, pointerEvents: "none",
+          background: "rgba(0,0,0,0.6)", backdropFilter: "blur(8px)",
+          borderRadius: 8, padding: "8px 12px", maxWidth: 360, maxHeight: "40vh",
+          overflowY: "auto", fontFamily: "monospace",
+        }}>
+          <p style={{ color: "#64748b", fontSize: 9, margin: "0 0 4px", textTransform: "uppercase", letterSpacing: "0.1em" }}>
+            LLM Output
+          </p>
+          {llmLog.map((cmd, i) => (
+            <div key={i} style={{ fontSize: 10, lineHeight: 1.4, marginBottom: 3 }}>
+              {cmd.missing ? (
+                <span style={{ color: "#94a3b8" }}>wishes: {cmd.missing.join(", ")}</span>
+              ) : (
+                <>
+                  <span style={{ color: "#60a5fa" }}>{cmd.body || cmd.full || "—"}</span>
+                  {cmd.arms && cmd.arms !== "auto" && <span style={{ color: "#a78bfa" }}> +{cmd.arms}</span>}
+                  {cmd.face && cmd.face !== "auto" && <span style={{ color: "#f472b6" }}> +{cmd.face}</span>}
+                  {cmd.say && <span style={{ color: "#fbbf24" }}> "{cmd.say.length > 30 ? cmd.say.slice(0, 30) + "..." : cmd.say}"</span>}
+                  <span style={{ color: "#475569" }}> {cmd.duration}s</span>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Autopilot status overlay (shows on main screen when speaking) */}
       {autopilot && autopilotStatus && autopilotStatus !== "Sequence complete" && (
