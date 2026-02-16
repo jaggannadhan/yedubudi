@@ -98,6 +98,19 @@ export function applyBody(name, P, avatar, t, progress = 0) {
       break;
     }
 
+    case "turn-left":
+    case "turn-right": {
+      // Rotation is handled by the animation loop (turnFrom → turnTo).
+      // Here we just add a subtle weight-shift feel.
+      const p = progress;
+      const shift = Math.sin(p * Math.PI);
+      const dir = name === "turn-left" ? 1 : -1;
+      avatar.position.y = shift * 0.02;
+      P.leftLeg.rotation.y = 0.1 * shift * dir;
+      P.rightLeg.rotation.y = -0.1 * shift * dir;
+      break;
+    }
+
     case "sit": {
       avatar.position.y = -0.4;
       P.leftLeg.rotation.x = -1.4;

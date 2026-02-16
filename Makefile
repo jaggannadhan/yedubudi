@@ -1,4 +1,4 @@
-.PHONY: install run build stop clean install-tts run-tts
+.PHONY: install run build stop clean install-backend run-backend
 
 PORT ?= 5173
 
@@ -11,6 +11,12 @@ run:
 build:
 	@cd frontend && npm run build
 
+install-backend:
+	@cd backend && python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt
+
+run-backend:
+	@cd backend && . .venv/bin/activate && python3 server.py
+
 stop:
 	@lsof -ti :$(PORT) | xargs kill -9 2>/dev/null || true
 	@lsof -ti :8765 | xargs kill -9 2>/dev/null || true
@@ -18,9 +24,3 @@ stop:
 
 clean:
 	@rm -rf frontend/dist frontend/node_modules
-
-install-tts:
-	@cd backend && python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt
-
-run-tts:
-	@cd backend && . .venv/bin/activate && python3 server.py

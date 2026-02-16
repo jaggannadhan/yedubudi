@@ -18,23 +18,31 @@ export function buildAvatar() {
 
   // === TORSO ===
   const torso = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.38, 0.32, 0.9, 16), toon(COLORS.shirt)
+    new THREE.CylinderGeometry(0.34, 0.28, 0.9, 16), toon(COLORS.shirt)
   );
   torso.position.y = 0.45;
   torso.castShadow = true;
   P.torso = torso;
   avatar.add(torso);
 
-  const collar = new THREE.Mesh(
-    new THREE.TorusGeometry(0.22, 0.04, 8, 16), toon(COLORS.shirt)
+  // === NECK ===
+  const neck = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.14, 0.16, 0.2, 12), toon(COLORS.skin)
   );
-  collar.position.set(0, 0.88, 0.05);
+  neck.position.y = 1.0;
+  neck.castShadow = true;
+  avatar.add(neck);
+
+  const collar = new THREE.Mesh(
+    new THREE.TorusGeometry(0.18, 0.04, 8, 16), toon(COLORS.shirt)
+  );
+  collar.position.set(0, 0.92, 0.02);
   collar.rotation.x = Math.PI / 2;
   avatar.add(collar);
 
   // === HEAD ===
   const headGroup = new THREE.Group();
-  headGroup.position.y = 1.3;
+  headGroup.position.y = 1.22;
   P.headGroup = headGroup;
 
   const head = new THREE.Mesh(
@@ -64,10 +72,10 @@ export function buildAvatar() {
   headGroup.add(hairTop);
 
   const bangs = new THREE.Mesh(
-    new THREE.BoxGeometry(0.7, 0.12, 0.25), toon(COLORS.hair)
+    new THREE.BoxGeometry(0.65, 0.08, 0.14), toon(COLORS.hair)
   );
-  bangs.position.set(0, 0.32, 0.28);
-  bangs.rotation.x = -0.2;
+  bangs.position.set(0, 0.40, 0.24);
+  bangs.rotation.x = -0.10;
   headGroup.add(bangs);
 
   [-1, 1].forEach((s) => {
@@ -82,7 +90,7 @@ export function buildAvatar() {
   // Eyes
   [-1, 1].forEach((s) => {
     const eg = new THREE.Group();
-    eg.position.set(s * 0.16, 0.06, 0.36);
+    eg.position.set(s * 0.16, 0.04, 0.39);
     const white = new THREE.Mesh(
       new THREE.SphereGeometry(0.09, 16, 16),
       new THREE.MeshToonMaterial({ color: COLORS.eye })
@@ -112,7 +120,7 @@ export function buildAvatar() {
       new THREE.BoxGeometry(0.12, 0.025, 0.04),
       new THREE.MeshBasicMaterial({ color: COLORS.hair })
     );
-    brow.position.set(s * 0.16, 0.2, 0.38);
+    brow.position.set(s * 0.16, 0.20, 0.38);
     brow.rotation.z = s * -0.15;
     headGroup.add(brow);
     if (s === -1) P.leftBrow = brow; else P.rightBrow = brow;
@@ -152,12 +160,12 @@ export function buildAvatar() {
   // === ARMS — with elbow joints ===
   [-1, 1].forEach((side) => {
     const shoulder = new THREE.Group();
-    shoulder.position.set(side * 0.48, 0.85, 0);
+    shoulder.position.set(side * 0.40, 0.85, 0);
 
     const upper = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.09, 0.08, 0.45, 12), toon(COLORS.shirt)
+      new THREE.CylinderGeometry(0.10, 0.09, 0.40, 12), toon(COLORS.shirt)
     );
-    upper.position.y = -0.22;
+    upper.position.y = -0.20;
     upper.castShadow = true;
     shoulder.add(upper);
 
@@ -174,11 +182,19 @@ export function buildAvatar() {
     elbowGroup.add(forearm);
 
     const hand = new THREE.Mesh(
-      new THREE.SphereGeometry(0.07, 12, 12), toon(COLORS.skin)
+      new THREE.SphereGeometry(0.09, 12, 12), toon(COLORS.skin)
     );
-    hand.position.y = -0.33;
-    hand.scale.set(1, 0.8, 0.8);
+    hand.position.y = -0.32;
+    hand.scale.set(1, 0.85, 0.9);
     elbowGroup.add(hand);
+
+    // Thumb
+    const thumb = new THREE.Mesh(
+      new THREE.SphereGeometry(0.035, 8, 8), toon(COLORS.skin)
+    );
+    thumb.position.set(side * 0.07, -0.30, 0.02);
+    thumb.scale.set(0.8, 1.2, 0.8);
+    elbowGroup.add(thumb);
 
     const key = side === -1 ? "left" : "right";
     P[key + "Arm"] = shoulder;
@@ -250,14 +266,14 @@ export function buildAvatar() {
     hip.position.set(side * 0.15, 0.02, 0);
 
     const upper = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.1, 0.09, 0.45, 12), toon(COLORS.pants)
+      new THREE.CylinderGeometry(0.13, 0.11, 0.45, 12), toon(COLORS.pants)
     );
     upper.position.y = -0.22;
     upper.castShadow = true;
     hip.add(upper);
 
     const lower = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.085, 0.08, 0.4, 12), toon(COLORS.pants)
+      new THREE.CylinderGeometry(0.11, 0.09, 0.4, 12), toon(COLORS.pants)
     );
     lower.position.y = -0.6;
     lower.castShadow = true;

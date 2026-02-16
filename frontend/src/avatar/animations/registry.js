@@ -5,6 +5,8 @@ export const bodyOptions = [
   { key: "step-back", label: "\u2B07\uFE0F Step Back" },
   { key: "step-left", label: "\u2B05\uFE0F Step Left" },
   { key: "step-right", label: "\u27A1\uFE0F Step Right" },
+  { key: "turn-left", label: "\u21A9\uFE0F Turn Left" },
+  { key: "turn-right", label: "\u21AA\uFE0F Turn Right" },
   { key: "jump", label: "\uD83E\uDD38 Jump" },
   { key: "jump-fwd", label: "\u21A9\uFE0F Leap" },
   { key: "lie-up", label: "\uD83D\uDECC Lie Up" },
