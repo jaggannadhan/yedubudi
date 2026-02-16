@@ -1,16 +1,13 @@
 export const bodyOptions = [
   { key: "idle", label: "\uD83E\uDDD1 Idle" },
+  { key: "walk", label: "\uD83D\uDEB6 Walk" },
   { key: "sit", label: "\uD83E\uDEE8 Sit" },
-  { key: "step-front", label: "\u2B06\uFE0F Step Front" },
-  { key: "step-back", label: "\u2B07\uFE0F Step Back" },
-  { key: "step-left", label: "\u2B05\uFE0F Step Left" },
-  { key: "step-right", label: "\u27A1\uFE0F Step Right" },
+  { key: "jump", label: "\uD83E\uDD38 Jump" },
+  { key: "crouch", label: "\uD83E\uDDCE Crouch" },
+  { key: "lie-down", label: "\uD83D\uDECC Lie Down" },
+  { key: "dying", label: "\uD83D\uDC80 Dying" },
   { key: "turn-left", label: "\u21A9\uFE0F Turn Left" },
   { key: "turn-right", label: "\u21AA\uFE0F Turn Right" },
-  { key: "jump", label: "\uD83E\uDD38 Jump" },
-  { key: "jump-fwd", label: "\u21A9\uFE0F Leap" },
-  { key: "lie-up", label: "\uD83D\uDECC Lie Up" },
-  { key: "lie-side", label: "\uD83D\uDCA4 Lie Side" },
 ];
 
 export const armOptions = [
@@ -22,6 +19,8 @@ export const armOptions = [
   { key: "pointing", label: "\uD83D\uDC46 Point" },
   { key: "heart", label: "\u2764\uFE0F Heart" },
   { key: "talk", label: "\uD83D\uDDE3\uFE0F Talk" },
+  { key: "pray", label: "\uD83D\uDE4F Pray" },
+  { key: "clap", label: "\uD83D\uDC4F Clap" },
 ];
 
 export const faceOptions = [
@@ -41,4 +40,8 @@ export const fullOptions = [
   { key: "front-kick", label: "\uD83E\uDD3C Front Kick" },
   { key: "roundhouse", label: "\uD83E\uDD4B Roundhouse" },
   { key: "mr-bean", label: "\uD83D\uDD7A Mr.Bean" },
+  { key: "breakdance", label: "\uD83E\uDD38 Breakdance" },
+  { key: "twerk", label: "\uD83D\uDC83 Twerk" },
+  { key: "joyful-jump", label: "\uD83C\uDF89 Joyful Jump" },
+  { key: "pose", label: "\uD83D\uDCF8 Pose" },
 ];

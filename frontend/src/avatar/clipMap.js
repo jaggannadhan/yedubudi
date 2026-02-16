@@ -1,7 +1,13 @@
 /**
- * Maps our command names to Mixamo animation filenames.
- * Each key is what AnimationManager knows the clip as.
- * Each value is the filename in /models/animations/.
+ * Maps command names to Mixamo animation base filenames.
+ * Each value is the "base name" used for auto-discovery of variants.
+ *
+ * The loader will probe for:
+ *   1. Exact file:  "Talking.fbx"
+ *   2. Numbered:    "Talking 1.fbx", "Talking 2.fbx", ... (until 404)
+ *
+ * Drop extra .fbx variants into /models/animations/ and they're
+ * automatically picked up — no code changes needed.
  */
 export const CLIP_FILES = {
   // Body
@@ -9,10 +15,11 @@ export const CLIP_FILES = {
   "walk":         "Walking.fbx",
   "sit":          "Sitting.fbx",
   "jump":         "Jump.fbx",
-  "lie-up":       "Lying Down.fbx",
-  "lie-side":     "Lying Down.fbx",
+  "lie-down":     "Lying Down.fbx",
+  "crouch":       "Crouch To Stand.fbx",
   "turn-left":    "Left Turn.fbx",
   "turn-right":   "Right Turn.fbx",
+  "dying":        "Dying.fbx",
 
   // Arms / gestures
   "wave":         "Waving.fbx",
@@ -22,6 +29,8 @@ export const CLIP_FILES = {
   "pointing":     "Pointing.fbx",
   "heart":        "Blow Kiss.fbx",
   "talk":         "Talking.fbx",
+  "pray":         "Praying.fbx",
+  "clap":         "Standing Clap.fbx",
 
   // Face / expressions
   "happy":        "Happy Idle.fbx",
@@ -37,6 +46,10 @@ export const CLIP_FILES = {
   "front-kick":   "Front Kick.fbx",
   "roundhouse":   "Roundhouse Kick.fbx",
   "mr-bean":      "Silly Dancing.fbx",
+  "breakdance":   "Breakdance Uprock Var 2.fbx",
+  "twerk":        "Dancing Twerk.fbx",
+  "joyful-jump":  "Joyful Jump.fbx",
+  "pose":         "Female Standing Pose.fbx",
 };
 
 const STEP_BODIES = new Set([
@@ -45,8 +58,9 @@ const STEP_BODIES = new Set([
 const TURN_BODIES = new Set(["turn-left", "turn-right"]);
 
 const ONE_SHOT = new Set([
-  "jump", "front-kick", "roundhouse", "twirl",
-  "wave", "thumbs-up", "peace", "pointing", "heart", "tired",
+  "jump", "joyful-jump", "front-kick", "roundhouse", "twirl",
+  "wave", "thumbs-up", "peace", "pointing", "heart",
+  "tired", "crouch", "clap", "breakdance",
 ]);
 
 /**

@@ -31,17 +31,19 @@ export class AnimationManager {
    */
   constructor(model, mixer) {
     this.model = model;
-    this.clips = {};
+    this.clips = {};          // name → clip (first variant, for hasClip compat)
+    this.variants = {};       // name → clip[]  (all variants)
+    this._lastVariant = {};   // name → index of last played variant (avoid repeats)
 
     // Primary mixer: body / full-body animations
     this.bodyMixer = mixer;
-    this.bodyActions = {};
+    this.bodyActions = {};    // name → action[]
     this.currentBodyAction = null;
     this.currentBodyName = null;
 
     // Secondary mixer: upper-body overlay (arms, gestures)
     this.upperMixer = new THREE.AnimationMixer(model);
-    this.upperActions = {};
+    this.upperActions = {};   // name → action[]
     this.currentUpperAction = null;
     this.currentUpperName = null;
 
@@ -78,28 +80,50 @@ export class AnimationManager {
     }
   }
 
-  /** Register a clip by command name (on both mixers) */
+  /** Register a single clip as a variant for the given command name */
   addClip(name, clip) {
-    this.clips[name] = clip;
+    if (!this.variants[name]) {
+      this.variants[name] = [];
+      this.bodyActions[name] = [];
+      this.upperActions[name] = [];
+    }
+    this.variants[name].push(clip);
+    this.clips[name] = this.variants[name][0]; // compat: first variant
 
     const bodyAction = this.bodyMixer.clipAction(clip);
     bodyAction.enabled = true;
     bodyAction.setEffectiveTimeScale(1);
     bodyAction.setEffectiveWeight(0);
-    this.bodyActions[name] = bodyAction;
+    this.bodyActions[name].push(bodyAction);
 
     const upperAction = this.upperMixer.clipAction(clip);
     upperAction.enabled = true;
     upperAction.setEffectiveTimeScale(1);
     upperAction.setEffectiveWeight(0);
-    this.upperActions[name] = upperAction;
+    this.upperActions[name].push(upperAction);
   }
 
-  /** Register multiple clips at once */
+  /** Register clips — accepts single clip or array of variant clips per name */
   addClips(clipMap) {
-    for (const [name, clip] of Object.entries(clipMap)) {
-      this.addClip(name, clip);
+    for (const [name, clipOrArray] of Object.entries(clipMap)) {
+      const clips = Array.isArray(clipOrArray) ? clipOrArray : [clipOrArray];
+      for (const clip of clips) {
+        this.addClip(name, clip);
+      }
     }
+  }
+
+  /** Pick a random variant index, avoiding the last one played (if >1 variant) */
+  _pickVariant(name) {
+    const count = this.variants[name]?.length || 0;
+    if (count <= 1) return 0;
+    const last = this._lastVariant[name] ?? -1;
+    let idx;
+    do {
+      idx = Math.floor(Math.random() * count);
+    } while (idx === last);
+    this._lastVariant[name] = idx;
+    return idx;
   }
 
   // ── Playback ──────────────────────────────────────────────
@@ -107,9 +131,11 @@ export class AnimationManager {
   /** Play on the body layer (lower body, or full body when no upper overlay) */
   playBody(name, { loop = true, crossfade = DEFAULT_CROSSFADE } = {}) {
     if (name === this.currentBodyName) return;
-    const next = this.bodyActions[name];
-    if (!next) { console.warn(`[AnimationManager] No clip: "${name}"`); return; }
+    const actions = this.bodyActions[name];
+    if (!actions?.length) { console.warn(`[AnimationManager] No clip: "${name}"`); return; }
 
+    const idx = this._pickVariant(name);
+    const next = actions[idx];
     next.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
     next.clampWhenFinished = !loop;
     next.reset().setEffectiveWeight(1).play();
@@ -122,9 +148,11 @@ export class AnimationManager {
   playUpper(name, { loop = true, crossfade = DEFAULT_CROSSFADE } = {}) {
     if (!this._hasLayers) { this.playBody(name, { loop, crossfade }); return; }
     if (name === this.currentUpperName) return;
-    const next = this.upperActions[name];
-    if (!next) { console.warn(`[AnimationManager] No clip: "${name}"`); return; }
+    const actions = this.upperActions[name];
+    if (!actions?.length) { console.warn(`[AnimationManager] No clip: "${name}"`); return; }
 
+    const idx = this._pickVariant(name);
+    const next = actions[idx];
     next.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
     next.clampWhenFinished = !loop;
     next.reset().setEffectiveWeight(1).play();
@@ -210,7 +238,13 @@ export class AnimationManager {
     );
   }
 
-  hasClip(name) { return name in this.clips; }
+  hasClip(name) { return (this.variants[name]?.length || 0) > 0; }
+
+  /** Get the duration (in seconds) of the currently playing body clip */
+  currentClipDuration() {
+    if (!this.currentBodyAction) return 0;
+    return this.currentBodyAction.getClip().duration;
+  }
 
   dispose() {
     this.bodyMixer.stopAllAction();

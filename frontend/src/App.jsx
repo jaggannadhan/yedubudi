@@ -33,7 +33,16 @@ export default function App() {
   const abortRef = useRef(null);
   const schedulerRef = useRef(null);
   const sessionIdRef = useRef(crypto.randomUUID());
+  const animMgrRef = useRef(null);
   const [llmProvider, setLlmProvider] = useState("");
+
+  // Voice input (wake word system)
+  const [voiceMode, setVoiceMode] = useState("off");     // "off" | "dormant" | "active"
+  const [voiceStatus, setVoiceStatus] = useState("");     // status text for UI
+  const voiceModeRef = useRef("off");
+  const recognitionRef = useRef(null);
+  const isSpeakingRef = useRef(false);
+  const micEnabledRef = useRef(false);
 
   // Refs for animation loop (avoids scene rebuild)
   const bodyRef = useRef("idle");
@@ -119,6 +128,114 @@ export default function App() {
     }).catch(() => {});
   }, []);
 
+  // ── Voice input (SpeechRecognition) ──
+  const WAKE_WORD = /\bjarvis\b/i;
+  const DISMISS_PATTERN = /\b(rest\s*(now\s*)?jarvis|go\s*to\s*sleep\s*jarvis|that'?s?\s*all\s*jarvis|goodbye\s*jarvis|dismiss\s*jarvis|sleep\s*jarvis|stop\s*listening)\b/i;
+
+  const startRecognition = () => {
+    const r = recognitionRef.current;
+    if (r && micEnabledRef.current && !isSpeakingRef.current) {
+      try { r.start(); } catch { /* already started */ }
+    }
+  };
+
+  const stopRecognition = () => {
+    const r = recognitionRef.current;
+    if (r) {
+      try { r.stop(); } catch { /* already stopped */ }
+    }
+  };
+
+  const setVoiceModeSync = (mode) => {
+    voiceModeRef.current = mode;
+    setVoiceMode(mode);
+  };
+
+  const enableMic = () => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      console.warn("[Voice] SpeechRecognition not supported");
+      return;
+    }
+
+    if (!recognitionRef.current) {
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = false;
+      recognition.lang = "en-US";
+
+      recognition.onresult = (event) => {
+        // Get the latest final result
+        const last = event.results[event.results.length - 1];
+        if (!last.isFinal) return;
+        const transcript = last[0].transcript.trim();
+        if (!transcript) return;
+        console.log(`[Voice] heard: "${transcript}" (mode: ${voiceModeRef.current})`);
+
+        if (voiceModeRef.current === "dormant") {
+          // Listening for wake word
+          if (WAKE_WORD.test(transcript)) {
+            // Strip wake word and filler
+            const command = transcript
+              .replace(/\b(hey|ok|okay|yo)?\s*jarvis\s*/i, "")
+              .trim();
+            setVoiceModeSync("active");
+            setVoiceStatus("Listening...");
+            if (command) {
+              startAutopilot(command);
+            } else {
+              startAutopilot("Someone just called your name. Acknowledge that you're listening and ready.");
+            }
+          }
+        } else if (voiceModeRef.current === "active") {
+          // Check for dismiss phrase
+          if (DISMISS_PATTERN.test(transcript)) {
+            setVoiceModeSync("dormant");
+            setVoiceStatus("Say 'Jarvis' to start");
+            startAutopilot("The user said goodbye. Say a brief farewell and go to idle.");
+          } else {
+            startAutopilot(transcript);
+          }
+        }
+      };
+
+      recognition.onend = () => {
+        // Auto-restart unless mic is disabled or avatar is speaking
+        if (micEnabledRef.current && !isSpeakingRef.current) {
+          setTimeout(startRecognition, 100);
+        }
+      };
+
+      recognition.onerror = (e) => {
+        if (e.error !== "no-speech" && e.error !== "aborted") {
+          console.warn("[Voice] error:", e.error);
+        }
+      };
+
+      recognitionRef.current = recognition;
+    }
+
+    micEnabledRef.current = true;
+    setVoiceModeSync("dormant");
+    setVoiceStatus("Say 'Jarvis' to start");
+    startRecognition();
+  };
+
+  const disableMic = () => {
+    micEnabledRef.current = false;
+    setVoiceModeSync("off");
+    setVoiceStatus("");
+    stopRecognition();
+  };
+
+  const toggleMic = () => {
+    if (micEnabledRef.current) {
+      disableMic();
+    } else {
+      enableMic();
+    }
+  };
+
   useEffect(() => {
     if (!mountRef.current) return;
     const container = mountRef.current;
@@ -190,6 +307,7 @@ export default function App() {
         useFallback = false;
         avatar = result.model;
         animMgr = new AnimationManager(result.model, result.mixer);
+        animMgrRef.current = animMgr;
         // Register any clips embedded in the base model
         for (const [name, clip] of Object.entries(result.clips)) {
           animMgr.addClip(name, clip);
@@ -382,10 +500,29 @@ export default function App() {
       const blob = await resp.blob();
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
+
+      // Mute mic while avatar speaks (prevents echo)
+      isSpeakingRef.current = true;
+      stopRecognition();
+
       return new Promise((resolve) => {
-        audio.onended = () => { URL.revokeObjectURL(url); resolve(audio.duration); };
-        audio.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
-        audio.play().catch(() => resolve(null));
+        audio.onended = () => {
+          URL.revokeObjectURL(url);
+          isSpeakingRef.current = false;
+          startRecognition(); // resume listening
+          resolve(audio.duration);
+        };
+        audio.onerror = () => {
+          URL.revokeObjectURL(url);
+          isSpeakingRef.current = false;
+          startRecognition();
+          resolve(null);
+        };
+        audio.play().catch(() => {
+          isSpeakingRef.current = false;
+          startRecognition();
+          resolve(null);
+        });
       });
     } catch {
       return null;
@@ -494,15 +631,22 @@ export default function App() {
       : (cmd.note || "...");
     setAutopilotStatus(statusText);
 
+    // Determine wait time: use actual clip duration for one-shot animations,
+    // LLM duration for looping ones (idle + talking, sit + focused, etc.)
+    const clipName = cmd.full || cmd.body || "idle";
+    const isOneShot = !shouldLoop(clipName);
+    const mgr = animMgrRef.current;
+    const clipDur = isOneShot && mgr ? mgr.currentClipDuration() : 0;
+    const waitMs = clipDur > 0 ? clipDur * 1000 : (cmd.duration || 3) * 1000;
+
     if (cmd.say) {
       // Speak and wait for audio to finish before next command
       speakText(cmd.say).then((audioDur) => {
-        // Use audio duration if available, otherwise fall back to cmd.duration
-        const wait = audioDur != null ? 0 : (cmd.duration || 3) * 1000;
+        const wait = audioDur != null ? 0 : waitMs;
         schedulerRef.current = setTimeout(playNext, wait);
       });
     } else {
-      schedulerRef.current = setTimeout(playNext, (cmd.duration || 3) * 1000);
+      schedulerRef.current = setTimeout(playNext, waitMs);
     }
   };
 
@@ -672,7 +816,10 @@ export default function App() {
           }}>
             {loadingMsg}
           </p>
-          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+          <style>{`
+            @keyframes spin { to { transform: rotate(360deg); } }
+            @keyframes pulse-mic { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+          `}</style>
         </div>
       )}
 
@@ -730,6 +877,29 @@ export default function App() {
           <p style={{ color: "#f472b6", fontSize: 13, fontWeight: 600, fontStyle: "italic", margin: 0, textAlign: "center" }}>
             {autopilotStatus}
           </p>
+        </div>
+      )}
+
+      {/* Voice mode indicator (bottom, visible when pane closed) */}
+      {voiceMode !== "off" && !paneOpen && (
+        <div style={{
+          position: "absolute", bottom: 80, left: "50%", transform: "translateX(-50%)",
+          zIndex: 4, pointerEvents: "none",
+          background: "rgba(0,0,0,0.5)", backdropFilter: "blur(10px)",
+          borderRadius: 12, padding: "6px 16px",
+          display: "flex", alignItems: "center", gap: 8,
+        }}>
+          <span style={{
+            display: "inline-block", width: 8, height: 8, borderRadius: "50%",
+            background: voiceMode === "active" ? "#4ade80" : "#fbbf24",
+            animation: voiceMode === "active" ? "pulse-mic 1.5s ease-in-out infinite" : "none",
+          }} />
+          <span style={{
+            color: voiceMode === "active" ? "#4ade80" : "#94a3b8",
+            fontSize: 11, fontWeight: 600,
+          }}>
+            {voiceMode === "active" ? "Listening..." : "Say 'Jarvis'"}
+          </span>
         </div>
       )}
 
@@ -807,7 +977,35 @@ export default function App() {
                   >
                     {autopilot ? "\u25A0 Stop" : "\u25B6 Go"}
                   </button>
+                  {(window.SpeechRecognition || window.webkitSpeechRecognition) && (
+                    <button
+                      onClick={toggleMic}
+                      title={voiceMode === "off" ? "Enable voice" : voiceMode === "active" ? "Conversation active" : "Listening for 'Jarvis'"}
+                      style={{
+                        padding: "8px 12px", borderRadius: 8, fontSize: 14, cursor: "pointer",
+                        border: "none", transition: "all 0.2s",
+                        background: voiceMode === "active"
+                          ? "rgba(74,222,128,0.3)"
+                          : voiceMode === "dormant"
+                            ? "rgba(251,191,36,0.2)"
+                            : "rgba(255,255,255,0.06)",
+                        color: voiceMode === "active"
+                          ? "#4ade80"
+                          : voiceMode === "dormant"
+                            ? "#fbbf24"
+                            : "#64748b",
+                        animation: voiceMode === "active" && !isSpeakingRef.current ? "pulse-mic 1.5s ease-in-out infinite" : "none",
+                      }}
+                    >
+                      {voiceMode === "off" ? "\uD83C\uDF99" : voiceMode === "active" ? "\uD83C\uDF99" : "\uD83C\uDF99"}
+                    </button>
+                  )}
                 </div>
+                {voiceStatus && (
+                  <p style={{ fontSize: 10, color: voiceMode === "active" ? "#4ade80" : "#fbbf24", margin: "6px 0 0", fontWeight: 600 }}>
+                    {voiceStatus}
+                  </p>
+                )}
                 {autopilotStatus && (
                   <p style={{ color: "#f472b6", fontSize: 11, fontWeight: 600, fontStyle: "italic", margin: "8px 0 0" }}>
                     {autopilotStatus}
